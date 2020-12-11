@@ -4,17 +4,19 @@ bottle-cas
 [![Build Status](https://travis-ci.org/Kellel/bottle-cas.svg?branch=master)](https://travis-ci.org/Kellel/bottle-cas)
 
 A CAS Client written with bottle.py
+It is a fork of the original bottle-cas package supporting python3
 
 ### Usage
 ```python
 
+import bottle
 from bottle import route, run, request, Bottle
 from bottle_cas.client import CASClient
 from bottle_cas.client import CASMiddleware
 cas = CASClient()
 
-app = Bottle()
-app = CASMiddleware(app)
+app = bottle.default_app()
+app = CASMiddleware(app, cas)
 
 @route('/')
 @cas.require
@@ -32,22 +34,26 @@ python setup.py build
 python setup.py install
 ```
 ### Configuration
-Configuration should be done in the config.py file located in your python site-packages
-```bash
-cd /usr/lib/python2.7/site-packages/bottle_cas
-vim config.py
+There is a default configuration in the config.py file located in your python site-packages
+You can override it by using parameters when initializing the CAS client
+
+```python
+cas = CASClient(cas_server="cas.acme.com",
+	cas_logout_url="/cas/logout",
+	cas_cookie="CAS",
+	secret="SUPER_SECRET_PASSPHRASE",
+	debug=False,
+	cookie_path="/",
+	beaker_type=file,
+	beaker_data_dir="/tmp/beaker/data",
+	beaker_lock_dir="/tmp/beaker/lock",
+	allow_http=TRUE,
+	timeout=600
+	)
 ```
 
-You really should only need to edit `CAS_SERVER` and `SECRET` to get this working.
-```bash
-CAS_SERVER = "https://sso.domian.com" # sso server you would like to auth against
-CAS_LOGOUT_URL = "/cas/logout" # The url of the logout
-CAS_COOKIE = "CAS" # Name of the cookie
-COOKIE_PATH = '/'
-MAX_COOKIE_AGE = 1
-SECRET = "PLOX_MAKE_DIS_SECRET"
-DEBUG = 1
-```
+You really should only need to override `cas_server` and `secret` to get this working.
+
 
 
 

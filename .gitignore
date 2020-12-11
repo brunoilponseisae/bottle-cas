@@ -1,3 +1,8 @@
 *.pyc
 build
 bottle_cas/config.py
+bottle_cas.egg-info/
+bottle_cas_python3.egg-info/
+dist/
+venv/
+

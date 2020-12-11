@@ -1,6 +1,7 @@
 #
 # Bottle-CAS Client
-# Written by: Kellen Fox
+# Forked by Bruno Ilponse
+# Initial author: Kellen Fox
 #
 # This module aims to be a sane implementation of the CAS protocol written to be used with the bottle.py framework
 #
@@ -13,33 +14,62 @@ CAS SSO Client for bottle applications
 from bottle import route, run, request, redirect, response
 import bottle
 import requests
-import urlparse
-from urllib import urlencode
+from urllib.parse import urlparse
+from urllib.parse import urlencode
+from urllib.parse import urlunsplit
 from functools import wraps
 import time
+import sys
 from beaker.middleware import SessionMiddleware
+import logging
+from . import config
 
 #  Status codes returned by function validate().
 TICKET_OK      = 0        #  Valid CAS server ticket found.
 TICKET_NONE    = 1        #  No CAS server ticket found.
 TICKET_INVALID = 2        #  Invalid CAS server ticket found.
 
-class CASClient():
-    def __init__(self):
-        import config
-        self._CAS_SERVER = config.CAS_SERVER
-        self._CAS_LOGOUT_URL = config.CAS_LOGOUT_URL
-        self._CAS_COOKIE = config.CAS_COOKIE
-        self._SECRET = config.SECRET
-        self._DEBUG = config.DEBUG
-        self._COOKIE_PATH = config.COOKIE_PATH
 
+class CASClient():
+    def __init__(self, **kwargs):
+        self.logger = logging.getLogger("bottle_cas")
+        self.logger.addHandler(logging.StreamHandler(sys.stdout))
+        self.logger.setLevel(logging.DEBUG)
+
+
+        self.CAS_SERVER = self.getParam("cas_server", config.CAS_SERVER, **kwargs)
+        self.CAS_LOGOUT_URL = self.getParam("cas_logout_url", config.CAS_LOGOUT_URL, **kwargs)
+        self.CAS_COOKIE = self.getParam("cas_cookie", config.CAS_COOKIE, **kwargs)
+        self.SECRET = self.getParam("secret", config.SECRET, **kwargs)
+        self.DEBUG = self.getParam("debug", config.DEBUG, **kwargs)
+        self.COOKIE_PATH = self.getParam("cookie_path", config.COOKIE_PATH, **kwargs)
+
+        self.BEAKER_TYPE = self.getParam("beaker_type", config.BEAKER_TYPE, **kwargs)
+        self.BEAKER_DATA_DIR = self.getParam("beaker_data_dir", config.BEAKER_DATA_DIR, **kwargs)
+        self.BEAKER_LOCK_DIR = self.getParam("beaker_lock_dir", config.BEAKER_LOCK_DIR, **kwargs)
+
+        self.ALLOW_HTTP = self.getParam("allow_http", config.ALLOW_HTTP, **kwargs)
+        self.TIMEOUT = self.getParam("timeout", config.TIMEOUT, **kwargs)
+
+
+        self.debug("Initialized")
+
+    # Returns a configuration parameter given its key
+    def getParam(self, key, default, **kwargs):
+        if key in kwargs:
+            return kwargs[key]
+        return default
+
+    # Debugging utility
+    def debug(self, text):
+        if self.DEBUG:
+            self.logger.info("[BOTTLE-CAS] " + text)
 
     def _do_login(self):
         url = request.urlparts
         newurl = (url[0],url[1],url[2],'',url[4])
-        params = { 'service': urlparse.urlunsplit(newurl) }
-        cas_url = self._CAS_SERVER + "/cas/login?" + urlencode(params)
+        params = { 'service': urlunsplit(newurl) }
+        cas_url = self.CAS_SERVER + "/cas/login?" + urlencode(params)
         redirect(cas_url)
 
     def test_login(self, fn):
@@ -84,27 +114,25 @@ class CASClient():
             session = request.environ['beaker.session']
             ticket = request.query.ticket;
             if 'username' in session:
-                if self._DEBUG:
-                    print "Valid Cookie Found"
+                self.debug("Valid Cookie Found")
                 request.environ['REMOTE_USER'] = session['username']
                 return fn(*args, **kwargs)
             elif ticket:
-                if self._DEBUG:
-                    print "Ticket: %s recieved" % ticket
+                self.debug("Ticket: %s received" % ticket)
                 status, user = self._validate(ticket)
                 if status==TICKET_OK:
-                    if self._DEBUG:
-                        print "Ticket OK"
+                    self.debug("Ticket OK")
                     session['username'] = user
                     session.save()
 
                     # Remove the query variables from uri
                     url = request.urlparts
                     new_url = (url[0],url[1],url[2],'',url[4])
-                    redirect(urlparse.urlunsplit(new_url))
+                    redirect(urlunsplit(new_url))
                     #return fn(*args, **kwargs)
                 else:
                     raise Exception("Ticket Validation FAILED!")
+            self.debug("User not authenticated: redirecting to cas login page")
             self._do_login()
         return wrapper
 
@@ -152,7 +180,7 @@ class CASClient():
         :returns: Will not return
         :rtype: `None`
         """
-        new_url = self._CAS_SERVER + self._CAS_LOGOUT_URL
+        new_url = self.CAS_SERVER + self.CAS_LOGOUT_URL
 
         if next:
             next = '?url=' + urlencode(next)
@@ -160,8 +188,7 @@ class CASClient():
         session = request.environ['beaker.session']
         session.delete()
         #response.set_cookie(self._CAS_COOKIE, '', expires=0)
-        if self._DEBUG:
-            print "User logged out with request %s" %new_url
+        self.debug("User logged out with request %s" % new_url)
         redirect(new_url)
 
     # A function to grab a xml tag. This isn't the best possible implementation but it works
@@ -194,9 +221,9 @@ class CASClient():
         :rtype: `int` and `string`
         """
         url = request.urlparts
-        newurl = urlparse.urlunsplit((url[0],url[1],url[2],'',url[4]))
+        newurl = urlunsplit((url[0],url[1],url[2],'',url[4]))
         params = { 'ticket': ticket, 'service': newurl }
-        url_string = self._CAS_SERVER + "/cas/serviceValidate?" + urlencode(params)
+        url_string = self.CAS_SERVER + "/cas/serviceValidate?" + urlencode(params)
         validate_resp = requests.get(url_string, verify=True)
         resp = validate_resp.text
         user = self._parse_tag(resp, "cas:user")
@@ -207,20 +234,21 @@ class CASClient():
             return TICKET_OK, user
 
 class CASMiddleware(SessionMiddleware):
-    def __init__(self, app):
+    def __init__(self, app, cas_client):
+        self.cas_client = cas_client
         SessionMiddleware.__init__(self, app, self.get_beaker_opts())
 
     def get_beaker_opts(self):
-        import config
+        cas_client = self.cas_client
         return  {
-            'session.type': config.BEAKER_TYPE,
-            'session.data_dir': config.BEAKER_DATA_DIR,
-            'session.lock_dir': config.BEAKER_LOCK_DIR,
+            'session.type': cas_client.BEAKER_TYPE,
+            'session.data_dir': cas_client.BEAKER_DATA_DIR,
+            'session.lock_dir': cas_client.BEAKER_LOCK_DIR,
             'session.cookie_expires': True,
-            'session.secure': not config.ALLOW_HTTP,
-            'session.timeout': config.TIMEOUT,
-            'session.validate_key': config.CAS_COOKIE + config.SECRET,
-            'session.encrypt_key': config.SECRET,
+            'session.secure': not cas_client.ALLOW_HTTP,
+            'session.timeout': cas_client.TIMEOUT,
+            'session.validate_key': cas_client.CAS_COOKIE + cas_client.SECRET,
+            'session.encrypt_key': cas_client.SECRET,
             }
 
 if __name__ == '__main__':
